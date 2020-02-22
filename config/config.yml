@@ -1,0 +1,14 @@
+proxy:
+  port: 25566
+  host: 0.0.0.0
+  workers: 0
+defaultServer: localhost
+blockList:
+  ips: !!import/single block-ip.yml
+  usernames:
+    - BadGays
+  uuids:
+    - 12b8b9e0eba0ca37e935f037ff1ae90d
+servers:
+  !!import/sequence
+  - servers/

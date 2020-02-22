@@ -8,9 +8,12 @@
     "target": "es2019",
     "sourceMap": true,
     "outDir": "./dist",
-    "incremental": true,
-    "skipLibCheck": true
+    "incremental": true
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*",
+    "bin/*",
+    "test/*"
+  ],
   "exclude": ["node_modules"]
 }

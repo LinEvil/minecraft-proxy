@@ -1,22 +1,20 @@
 import * as Logger from 'bunyan'
 import {EventEmitter} from 'events'
 import {createServer, Server, Socket} from 'net'
+import {Container} from 'typedi'
+import {Backend, IBackend} from './backend'
 import {Client} from './client'
-
-interface IBackend {
-  host: string
-  port: number
-  version: string
-  handlePing: boolean
-}
+import {Config} from './config'
 
 export class ProxyServer extends EventEmitter {
   public clients: Set<Client> = new Set()
+  public defaultServer: string
 
   private server: Server
   private logger: Logger
 
-  public backends: Map<string, IBackend> = new Map()
+  private backends: Map<string, Backend> = new Map()
+  private config: Config = Container.get('config')
 
   constructor(
     private port: number,
@@ -26,7 +24,7 @@ export class ProxyServer extends EventEmitter {
     this.logger = Logger.createLogger({name: 'server', port, host})
   }
 
-  async listen(): Promise<void> {
+  public async listen(): Promise<void> {
     if (this.server) throw new Error('already listen')
     const server = this.server = createServer()
     await new Promise((resolve) => {
@@ -36,9 +34,24 @@ export class ProxyServer extends EventEmitter {
     this.logger.info('ready')
   }
 
+  public addBackend(name: string, backend: IBackend): void {
+    if (this.backends.has(name)) {
+      throw new Error(`duplicate name ${name}`)
+    }
+    this.backends.set(name, new Backend(backend))
+  }
+
+  public getBackend(name: string): Backend {
+    if (this.backends.has(name)) return this.backends.get(name)
+    if (this.backends.has(this.defaultServer)) return this.backends.get(this.defaultServer)
+    return null
+  }
+
   private async onConnection(socket: Socket): Promise<void> {
     if (this.isIpBanned(socket.remoteAddress)) {
       socket.end()
+      this.logger.warn({ip: socket.remoteAddress}, `block ip ${socket.remoteAddress}`)
+      return
     }
     const client = new Client(socket, this)
     this.clients.add(client)
@@ -47,32 +60,24 @@ export class ProxyServer extends EventEmitter {
       this.logger.error({err})
     })
     const nextState = await client.awaitHandshake()
-    const backend = this.backends.get(client.host)
+    const backend = this.getBackend(client.host)
     if (!backend) return client.close(`${client.host} not found`)
-    await client.pipeToBackend(backend.port, backend.host, backend.version, nextState)
-    // if (nextState !== 1) {
-    //   await client.pipeToBackend(backend.port, backend.host, backend.version, nextState)
-    // } else {
-    //   client.write('server_info', {response: JSON.stringify({
-    //       "version": {
-    //         "name": "1.8.7",
-    //         "protocol": 5
-    //       },
-    //       "players": {
-    //         "max": 100,
-    //         "online": 5,
-    //         "sample": [
-    //           {
-    //             "name": "thinkofdeath",
-    //             "id": "4566e69f-c907-48ee-8d71-d7ba5aa00d20"
-    //           }
-    //         ]
-    //       },
-    //       "description": {
-    //         "text": "Hello world"
-    //       }
-    //     })})
-    // }
+    if (nextState === 2 || !backend.handlePing) {
+      if (client.username && this.isUsernameBanned(client.username)) {
+        this.logger.warn({ip: socket.remoteAddress, username: client.username}, `block username ${client.username}`)
+        client.close('username banned')
+        return
+      }
+      if (backend.onlineMode && this.isUuidBanned(await client.getUUID(backend))) {
+        this.logger.warn({ip: socket.remoteAddress, username: client.username, uuid: await client.getUUID(backend)},
+          `block uuid ${await client.getUUID(backend)}`)
+        client.close('uuid banned')
+        return
+      }
+      await client.pipeToBackend(backend, nextState)
+    } else {
+      await client.responsePing(backend)
+    }
   }
 
   private onDisconnect(client: Client): void {
@@ -80,6 +85,14 @@ export class ProxyServer extends EventEmitter {
   }
 
   private isIpBanned(ip: string): boolean {
-    return false
+    return this.config.blockList.ips.some((cidr) => cidr.contains(ip))
+  }
+
+  private isUsernameBanned(username: string): boolean {
+    return this.config.blockList.usernames.includes(username)
+  }
+
+  private isUuidBanned(uuid: string): boolean {
+    return this.config.blockList.uuids.includes(uuid)
   }
 }

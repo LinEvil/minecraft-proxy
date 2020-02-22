@@ -1,15 +1,36 @@
-import 'reflect-metadata'
 import {States} from 'minecraft-protocol'
+import 'reflect-metadata'
 import {Container} from 'typedi'
+import {loadConfig} from './config'
 import {ProxyServer} from './proxy-server'
 
-const proxy = new ProxyServer(25566)
+async function bootstrap(): Promise<void> {
+  const config = await loadConfig()
+  Container.set('config', config)
 
-Container.set('proxy', proxy)
+  const proxy = new ProxyServer(config.proxy.port, config.proxy.host)
 
-proxy.listen()
+  Container.set('proxy', proxy)
 
-proxy.backends.set('localhost', {version: '1.8.7', host: 'localhost', port: 25565, handlePing: true})
+  for (const server of config.servers) {
+    proxy.addBackend(server.serverName, {
+      ...server,
+      host: server.proxyHost,
+      port: server.proxyPort,
+    })
+  }
+  proxy.defaultServer = config.defaultServer
+
+  await proxy.listen()
+}
+
+bootstrap()
+  .catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(err)
+    process.exit(1)
+  })
+
 
 declare module 'minecraft-protocol' {
   export const states: typeof States
